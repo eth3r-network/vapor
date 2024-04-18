@@ -5,12 +5,14 @@
 
 package ether
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
 func (c *Connection) serve0001(manager *Manager) {
 	c.authState = 1
 
-	if err := c.ack(); err != nil {
+	if err := c.ack(); !checkErr(err) {
 		c.abandon()
 		return
 	}
@@ -21,7 +23,7 @@ func (c *Connection) serve0001(manager *Manager) {
 	for !pass {
 		l, err := c.bind.Read(buff)
 
-		if err != nil {
+		if !checkErr(err) {
 			c.log.Warn("There has been an error in pkt reading", err)
 			c.handleErr(1, 0xff)
 
@@ -73,7 +75,7 @@ func (c *Connection) serve0001(manager *Manager) {
 
 	c.authState = 3
 
-	if err := c.ack(); err != nil {
+	if err := c.ack(); !checkErr(err) {
 		c.abandon() // there is no reason to reach this
 		return
 	}
@@ -81,7 +83,7 @@ func (c *Connection) serve0001(manager *Manager) {
 	for {
 		l, err := c.bind.Read(buff)
 
-		if err != nil {
+		if !checkErr(err) {
 			c.log.Warn("There has been an error reading pkt", err)
 			c.handleErr(3, 0xff)
 

@@ -7,7 +7,9 @@ package ether
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 )
@@ -112,6 +114,20 @@ func (c *Connection) NotifyRoomClose(r *Room) error {
 
 func (c *Connection) ComputeKeyId() int {
 	return 0
+}
+
+func checkErr(err error) bool {
+	// handles EOF errors as nil, returns false if no error, true if should break
+
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, io.EOF) {
+		return false
+	}
+
+	return true
 }
 
 func Test() {
