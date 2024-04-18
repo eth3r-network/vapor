@@ -7,24 +7,30 @@ package ether
 
 import (
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"io"
 )
 
 func (c *Connection) serve0001(manager *Manager) {
+	c.log.Info("ola from serve0001")
+
 	c.authState = 1
 
-	if err := c.ack(); !checkErr(err) {
+	if err := c.ack(); checkErr(err) {
+		c.log.Warn("Error sending ack", "err", err)
 		c.abandon()
 		return
 	}
 
-	var buff []byte
+	buff := make([]byte, 1024)
 	pass := false
 
 	for !pass {
 		l, err := c.bind.Read(buff)
 
-		if !checkErr(err) {
-			c.log.Warn("There has been an error in pkt reading", err)
+		if checkErr(err) {
+			c.log.Warn("There has been an error in pkt reading", "err", err)
 			c.handleErr(1, 0xff)
 
 			continue
@@ -32,7 +38,7 @@ func (c *Connection) serve0001(manager *Manager) {
 
 		// Check minimal length
 		if l < 4 {
-			c.log.Warn("There has been an error while receiving the key", err)
+			c.log.Warn("There has been an error while receiving the key", "err", err)
 			c.handleErr(1, 0xaa)
 
 			continue
@@ -50,8 +56,8 @@ func (c *Connection) serve0001(manager *Manager) {
 		keyLength := binary.BigEndian.Uint16(buff[2:4])
 
 		// Verify message length
-		if uint16(len(buff)) != uint16(4)+keyLength {
-			c.log.Warn("Key payload malformation")
+		if uint16(l) != uint16(4)+keyLength {
+			c.log.Warn("Key payload malformation", "len", l)
 			c.handleErr(1, 0xac)
 
 			continue
@@ -65,9 +71,10 @@ func (c *Connection) serve0001(manager *Manager) {
 	}
 
 	c.authState = 2
+	c.log.Info("Authstate 2, key passed", "length", c.keyLength)
 
 	if err := c.ComputeKeyId(); err != 0 {
-		c.log.Warn("Could not derive KeyId from PubKey")
+		c.log.Warn("Could not derive KeyId from PubKey", "err", err)
 		c.handleErr(2, 0xad)
 	}
 
@@ -75,7 +82,7 @@ func (c *Connection) serve0001(manager *Manager) {
 
 	c.authState = 3
 
-	if err := c.ack(); !checkErr(err) {
+	if err := c.ack(); checkErr(err) {
 		c.abandon() // there is no reason to reach this
 		return
 	}
@@ -83,8 +90,13 @@ func (c *Connection) serve0001(manager *Manager) {
 	for {
 		l, err := c.bind.Read(buff)
 
-		if !checkErr(err) {
-			c.log.Warn("There has been an error reading pkt", err)
+		if errors.Is(err, io.EOF) {
+			c.log.Warn("Client disconnected")
+			return
+		}
+
+		if checkErr(err) {
+			c.log.Warn("There has been an error reading pkt", "err", err)
 			c.handleErr(3, 0xff)
 
 			continue
@@ -99,7 +111,7 @@ func (c *Connection) serve0001(manager *Manager) {
 		switch buff[0] {
 		case 0xba:
 			// Key retrieval
-			c.log.Debug("Fetching user", buff[1:])
+			c.log.Debug("Fetching user", "id", hex.EncodeToString(buff[1:]))
 			conn := manager.FetchUserById(buff[1:]) // conn is c2's connection
 
 			if conn == nil {
@@ -127,7 +139,7 @@ func (c *Connection) serve0001(manager *Manager) {
 			_, err := c.bind.Write(respBuff) // write
 
 			if err != nil {
-				c.log.Warn("Could not send the user key, internal server error")
+				c.log.Warn("Could not send the user key, internal server error", "err", err)
 			}
 
 			continue
@@ -137,8 +149,8 @@ func (c *Connection) serve0001(manager *Manager) {
 
 			kLength := uint(c2[0])
 
-			if uint(len(c2)-2) != kLength { // 2 is 0xeeLL
-				c.log.Warn("Wrong packet length")
+			if uint(l-2-1) != kLength { // 2 is 0xeeLL
+				c.log.Warn("Wrong packet length", "l-3", l-3, "shouldBe", kLength)
 				c.handleErr(2, 0xa1)
 
 				continue
@@ -157,7 +169,7 @@ func (c *Connection) serve0001(manager *Manager) {
 			c2Conn.SendKnock0001(c) // send knock to c2 from c
 
 			if _, err := c.bind.Write([]byte{0xa0, 0xee}); err != nil {
-				c.log.Warn("Could not send the ack pkg")
+				c.log.Warn("Could not send the ack pkg", "err", err)
 
 				continue
 			}
@@ -167,20 +179,20 @@ func (c *Connection) serve0001(manager *Manager) {
 			// Knock ans
 
 			respVal := (buff[1] == 0x01)
-			c.log.Debug("%b", respVal)
+			c.log.Debug("Knock ans", "res", respVal)
 
 			c2 := buff[2:]
 
 			kLength := uint(c2[0])
 
-			if uint(len(c2)-3) != kLength { // 3 is 0xabRR[LL,...]
-				c.log.Warn("Wrong packet length")
+			if uint(l-3-2) != kLength { // 3 is 0xabRR[LL,...]
+				c.log.Warn("Wrong packet length", "l-5", l-5, "kLength", kLength)
 				c.handleErr(2, 0xa1)
 
 				continue
 			}
 
-			c.log.Debug("Fetching user", c2[1:])
+			c.log.Debug("Fetching user", "uid", hex.EncodeToString(c2[1:]))
 			c2Conn := manager.FetchUserById(c2[1:])
 
 			if c2Conn == nil {
