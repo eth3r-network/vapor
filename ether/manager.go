@@ -7,6 +7,7 @@ package ether
 
 import (
 	b64 "encoding/base64"
+	"encoding/binary"
 	"log/slog"
 	"net"
 	"strconv"
@@ -18,7 +19,8 @@ type Manager struct {
 	logger        *slog.Logger
 	clients       []*Connection
 	authedClients map[string]*Connection
-	rooms         map[uint64]*Room
+	rooms         map[string]*Room
+	rCnt          uint64
 }
 
 func Initialise(port int, log *slog.Logger) *Manager {
@@ -29,7 +31,8 @@ func Initialise(port int, log *slog.Logger) *Manager {
 	newManager.logger = log
 
 	newManager.authedClients = make(map[string]*Connection)
-	newManager.rooms = make(map[uint64]*Room)
+	newManager.rooms = make(map[string]*Room)
+	newManager.rCnt = 0
 
 	return newManager
 }
@@ -73,7 +76,9 @@ func (m *Manager) DropClient(c *Connection) {
 }
 
 func (m *Manager) RegisterRoom(r *Room) {
-	m.rooms[r.roomId] = r
+	hash := b64.StdEncoding.EncodeToString(r.roomId)
+
+	m.rooms[hash] = r
 }
 
 func (m *Manager) DropRoom(r *Room) {
@@ -81,11 +86,13 @@ func (m *Manager) DropRoom(r *Room) {
 		client.NotifyRoomClose(r)
 	}
 
-	delete(m.rooms, r.roomId)
+	hash := b64.StdEncoding.EncodeToString(r.roomId)
+
+	delete(m.rooms, hash)
 }
 
 func (m *Manager) FetchUserById(keyId []byte) *Connection {
-	keyIdLength := uint16(len(keyId))
+	keyIdLength := uint(len(keyId))
 
 	for _, conn := range m.clients {
 		if conn.authState >= 3 && conn.keyIdLength == keyIdLength {
@@ -93,6 +100,27 @@ func (m *Manager) FetchUserById(keyId []byte) *Connection {
 			if compare(keyId, conn.keyId) {
 				return conn
 			}
+		}
+	}
+
+	return nil
+}
+
+func (m *Manager) SpawnRoom() *Room {
+	nR := new(Room)
+
+	binary.LittleEndian.PutUint64(nR.roomId, m.rCnt)
+	nR.roomIdLength = uint(8)
+
+	m.RegisterRoom(nR)
+
+	return nR
+}
+
+func (m *Manager) FetchRoom(rid []byte) *Room {
+	for _, r := range m.rooms {
+		if compare(r.roomId, rid) {
+			return r
 		}
 	}
 

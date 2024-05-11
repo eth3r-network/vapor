@@ -7,14 +7,17 @@ package ether
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 )
 
 type Room struct {
-	roomId  uint64
-	clients []*Connection
+	roomId       []byte
+	roomIdLength uint
+	clients      []*Connection
 }
 
 type Connection struct {
@@ -22,7 +25,7 @@ type Connection struct {
 	key         []byte
 	keyId       []byte
 	keyLength   uint16
-	keyIdLength uint16
+	keyIdLength uint
 	rooms       []*Room
 
 	bind net.Conn
@@ -62,7 +65,7 @@ func (c *Connection) abandon() {
 }
 
 func (c *Connection) Serve(m *Manager) {
-	var buff []byte
+	buff := make([]byte, 1024)
 
 	l, err := c.bind.Read(buff)
 
@@ -74,14 +77,15 @@ func (c *Connection) Serve(m *Manager) {
 	}
 
 	if l != 6 {
-		c.log.Warn("The client sent a wrong amount of data")
+		c.log.Warn("The client sent a wrong amount of data: l=" + strconv.Itoa(l) + " " + hex.EncodeToString(buff))
 		c.handleErr(0, 0xa1)
 
 		return
 	}
 
-	if buff[0] != 0x05 || buff[1] != 0x31 || buff[2] != 0x80 || buff[3] != 0x08 {
+	if buff[0] != 0x05 || buff[1] != 0x31 || buff[2] != 0xb0 || buff[3] != 0x0b {
 		c.log.Warn("Wrong payload, first message")
+		c.log.Warn(hex.EncodeToString(buff[0:4]))
 		c.handleErr(0, 0xa2)
 
 		return
@@ -91,6 +95,7 @@ func (c *Connection) Serve(m *Manager) {
 
 	switch version {
 	case 0x0001:
+		c.log.Info("Serving with version 0x0001")
 		c.serve0001(m)
 	default:
 		c.log.Warn("Unsupported version", "ver", version)
@@ -98,12 +103,29 @@ func (c *Connection) Serve(m *Manager) {
 	}
 }
 
-func (c *Connection) NotifyRoomClose(r *Room) {
-	// TODO
+func (c *Connection) NotifyRoomClose(r *Room) error {
+	buff := []byte{0xaf}
+
+	buff = append(buff, byte(r.roomIdLength))
+	buff = append(buff, r.roomId...)
+
+	_, err := c.bind.Write(buff)
+
+	return err
 }
 
 func (c *Connection) ComputeKeyId() int {
 	return 0
+}
+
+func checkErr(err error) bool {
+	// handles EOF errors as nil, returns false if no error, true if should break
+
+	if err == nil {
+		return false
+	}
+
+	return true
 }
 
 func Test() {
